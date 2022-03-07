@@ -11,13 +11,34 @@ window.addEventListener('resize', onWindowResize);
 
 // init renderer
 const renderer = new THREE.WebGLRenderer({antialias: false});
-renderer
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
+const texture = new THREE.TextureLoader().load('textures/terrain.png');
+texture.magFilter = THREE.NearestFilter;
+texture.minFilter = THREE.NearestFilter;
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+// init scene
+const scene = new THREE.Scene();
+
+// Sky color
+scene.background = new THREE.Color(0xbfd1e5);
+
+// Sun
+const light = new THREE.AmbientLight(0xffffff);
+scene.add(light);
+
+const blockMaterial = new THREE.MeshLambertMaterial({
+    map: texture,
+    transparent: true,
+    side: THREE.DoubleSide
+});
 
 const params = {
+    'mipmaps': false,
     'x': 64,
     'y': 0,
     'z': 64,
@@ -32,33 +53,17 @@ mapFolder.add(params, 'arr', maps).name('Map List')
 mapFolder.add(params, 'arr', texpacks).name('Texture Pack')
 mapFolder.open()
 const camFolder = gui.addFolder('Camera')
+camFolder.add(params, 'mipmaps').name('Mipmaps').onChange(function(mipmaps) {
+    blockMaterial.map = new THREE.TextureLoader().load('textures/terrain.png');
+    blockMaterial.map.magFilter = THREE.NearestFilter;
+
+    if (mipmaps) blockMaterial.map.minFilter = THREE.NearestMipmapLinearFilter;
+    else blockMaterial.map.minFilter = THREE.NearestFilter;
+});
 camFolder.add(params, 'x').name('Center X')
 camFolder.add(params, 'y').name('Center Y')
 camFolder.add(params, 'z').name('Center Z')
 camFolder.open()
-
-
-
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-
-// init scene
-const scene = new THREE.Scene();
-
-// Sky color
-scene.background = new THREE.Color(0xbfd1e5);
-
-// Sun
-const light = new THREE.AmbientLight(0xffffff);
-scene.add(light);
-
-const texture = new THREE.TextureLoader().load('textures/terrain.png');
-texture.magFilter = THREE.NearestFilter;
-
-const blockMaterial = new THREE.MeshLambertMaterial({
-    map: texture,
-    transparent: true,
-    side: THREE.DoubleSide
-});
 
 function setTexture(geometry, tex) {
     let uv = geometry.attributes.uv;
@@ -66,23 +71,19 @@ function setTexture(geometry, tex) {
     const width = 16;
     const height = 16;
 
-    // try to fix gaps when using atlas textures
-    // TODO: better system for it
-    const offset = 0.001;
-
     const y = (height-1) - Math.floor(tex / 16);
     const x = tex % 16;
 
-    uv.setXY(0, x/width + offset, (y+1)/height - offset);
-    uv.setXY(1, (x+1)/width - offset, (y+1)/height - offset);
-    uv.setXY(2, x/width + offset, y/height + offset);
-    uv.setXY(3, (x+1)/width - offset, y/height + offset);
+    uv.setXY(0, x/width, (y+1)/height);
+    uv.setXY(1, (x+1)/width, (y+1)/height);
+    uv.setXY(2, x/width, y/height);
+    uv.setXY(3, (x+1)/width, y/height);
 
     if (uv.count === 8) { // sprite
-        uv.setXY(4, x/width + offset, (y+1)/height - offset);
-        uv.setXY(5, (x+1)/width - offset, (y+1)/height - offset);
-        uv.setXY(6, x/width + offset, y/height + offset);
-        uv.setXY(7, (x+1)/width - offset, y/height + offset);
+        uv.setXY(4, x/width, (y+1)/height);
+        uv.setXY(5, (x+1)/width, (y+1)/height);
+        uv.setXY(6, x/width, y/height);
+        uv.setXY(7, (x+1)/width, y/height);
     }
 
     uv.needsUpdate = true;
@@ -168,7 +169,8 @@ function shouldCull(curBlock, x, y, z) {
     let index = coordsToIndex(x, y, z);
     let block = blocks[index];
     if (!block || block === 0) return false;
-    if (block >=8 && block <= 11 && (curBlock < 8 || curBlock > 11)) return false; // Cull liquids touching each other
+    if (block >= 8 && block <= 11 && (curBlock < 8 || curBlock > 11)) return false; // Cull liquids touching each other
+    if (block === 18) return false; // Don't cull leaves TODO: fix z-fighting
     return !blocklist[block][0]; //true for sprites, false for blocks
 }
 
