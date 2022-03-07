@@ -24,20 +24,41 @@ const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerH
 // init scene
 const scene = new THREE.Scene();
 
+const env = {
+    sun: 0xffffff,
+    shadow: 0x9b9b9b,
+    sky: 0x99ccff,
+    fog: 0xffffff,
+    fogAmount: 4096
+}
+
 // Sky color
-scene.background = new THREE.Color(0xbfd1e5);
+scene.background = new THREE.Color(0xd0e7ff); // TODO: how is this calculated in cc? sky + fog?
+
+// Shadow
+const shadow = new THREE.AmbientLight(env.shadow);
+scene.add(shadow);
 
 // Sun
-const light = new THREE.AmbientLight(0xffffff);
-scene.add(light);
+const directionalLight = new THREE.DirectionalLight(env.sun, 0.4);
+directionalLight.position.set( 1, 1, 0.5 ).normalize();
+scene.add( directionalLight );
+
+const axes = new THREE.AxesHelper(2);
+axes.renderOrder = 1;
 
 const blockMaterial = new THREE.MeshLambertMaterial({
+    map: texture
+});
+
+const transparentMaterial = new THREE.MeshLambertMaterial({
     map: texture,
     transparent: true,
     side: THREE.DoubleSide
 });
 
 const params = {
+    'axes': false,
     'mipmaps': false,
     'x': 64,
     'y': 0,
@@ -49,16 +70,35 @@ const texpacks = ['default']
 
 const gui = new GUI()
 const mapFolder = gui.addFolder('Map')
-mapFolder.add(params, 'arr', maps).name('Map List')
-mapFolder.add(params, 'arr', texpacks).name('Texture Pack')
+mapFolder.add(params, 'arr', maps).name('Map').setValue(maps[0])
+mapFolder.add(params, 'arr', texpacks).name('Texture Pack').setValue(texpacks[0])
 mapFolder.open()
+
+const envFolder = gui.addFolder('Env')
+envFolder.addColor(env, 'fog').name('Fog')
+envFolder.addColor(env, 'sun').name('Sun')
+envFolder.addColor(env, 'shadow').name('Shadow')
+envFolder.addColor(env, 'sky').name('Sky')
+envFolder.add(env, 'fogAmount', 1, 4096, 256).name('Fog Distance')
+envFolder.open()
+
 const camFolder = gui.addFolder('Camera')
 camFolder.add(params, 'mipmaps').name('Mipmaps').onChange(function(mipmaps) {
-    blockMaterial.map = new THREE.TextureLoader().load('textures/terrain.png');
-    blockMaterial.map.magFilter = THREE.NearestFilter;
+    const texture = new THREE.TextureLoader().load('textures/terrain.png');
+    texture.magFilter = THREE.NearestFilter;
 
-    if (mipmaps) blockMaterial.map.minFilter = THREE.NearestMipmapLinearFilter;
-    else blockMaterial.map.minFilter = THREE.NearestFilter;
+    if (mipmaps) texture.minFilter = THREE.NearestMipmapLinearFilter;
+    else texture.minFilter = THREE.NearestFilter;
+
+    blockMaterial.map = texture;
+    transparentMaterial.map = texture;
+});
+camFolder.add(params, 'axes').name('Axes').onChange(function(b) {
+    if (b) {
+        scene.add(axes);
+    } else {
+        scene.remove(axes);
+    }
 });
 camFolder.add(params, 'x').name('Center X')
 camFolder.add(params, 'y').name('Center Y')
@@ -174,8 +214,16 @@ function shouldCull(curBlock, x, y, z) {
     return !blocklist[block][0]; //true for sprites, false for blocks
 }
 
+function isTransparent(block) {
+    if (block >= 8 && block <= 11) return true;
+    if (block === 0) return true;
+    if (block === 18) return true;
+    return blocklist[block][0]; // Sprite blocks are transparent, solid blocks arent.
+}
+
 
 const geometries = [];
+const transparentGeometries = [];
 
 let worldWidth, worldHeight, worldLength, blocks;
 
@@ -212,7 +260,8 @@ for (let x = 0; x < worldWidth; x++) {
                 let geometry = spriteGeometry.clone().applyMatrix4(matrix);
 
                 if (textures) setTexture(geometry, textures[1]);
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
                 continue;
             }
 
@@ -222,7 +271,8 @@ for (let x = 0; x < worldWidth; x++) {
                 if (textures) setTexture(geometry, textures[1]);
                 if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
 
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
             }
             if (!shouldCull(block, x, y-1, z) || y === 0) {
                 let geometry = nyGeometry.clone().applyMatrix4(matrix);
@@ -230,7 +280,8 @@ for (let x = 0; x < worldWidth; x++) {
                 if (textures) setTexture(geometry, textures[6]);
                 if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
 
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
             }
             if (!shouldCull(block, x+1, y, z) || x+1 === worldWidth) {
                 let geometry = pxGeometry.clone().applyMatrix4(matrix);
@@ -238,7 +289,8 @@ for (let x = 0; x < worldWidth; x++) {
                 if (textures) setTexture(geometry, textures[2]);
                 if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
 
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
             }
             if (!shouldCull(block, x-1, y, z) || x === 0) {
                 let geometry = nxGeometry.clone().applyMatrix4(matrix);
@@ -246,7 +298,8 @@ for (let x = 0; x < worldWidth; x++) {
 
                 if (textures) setTexture(geometry, textures[4]);
 
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
             }
             if (!shouldCull(block, x, y, z+1) || z+1 === worldLength) {
                 let geometry = pzGeometry.clone().applyMatrix4(matrix);
@@ -254,7 +307,8 @@ for (let x = 0; x < worldWidth; x++) {
                 if (textures) setTexture(geometry, textures[3]);
                 if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
 
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
             }
             if (!shouldCull(block, x, y, z-1) || z === 0) {
                 let geometry = nzGeometry.clone().applyMatrix4(matrix);
@@ -262,7 +316,8 @@ for (let x = 0; x < worldWidth; x++) {
                 if (textures) setTexture(geometry, textures[5]);
                 if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
 
-                geometries.push(geometry);
+                if (isTransparent(block)) transparentGeometries.push(geometry);
+                else geometries.push(geometry);
             }
         }
     }
@@ -275,6 +330,12 @@ geometry.computeBoundingSphere();
 const mesh = new THREE.Mesh(geometry, blockMaterial);
 scene.add(mesh);
 
+const transparentGeometry = mergeBufferGeometries(transparentGeometries);
+transparentGeometry.computeBoundingSphere();
+
+const transparentMesh = new THREE.Mesh(transparentGeometry, transparentMaterial);
+scene.add(transparentMesh);
+
 camera.position.x = worldWidth;
 camera.position.y = worldHeight;
 camera.position.z = worldLength;
@@ -286,9 +347,6 @@ controls.target.set(0, 0.5, 0);
 controls.update();
 controls.enablePan = false;
 controls.enableDamping = true;
-
-const axes = new THREE.AxesHelper(2);
-scene.add(axes);
 
 function animate() {
     requestAnimationFrame(animate);
