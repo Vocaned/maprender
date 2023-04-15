@@ -1,109 +1,165 @@
 import './style.css'
-import * as THREE from 'three';
-
 import './nbt.js'
 
-import { OrbitControls } from './OrbitControls.js';
-import { mergeBufferGeometries } from './BufferGeometryUtils';
-import { GUI } from 'dat.gui'
+import * as THREE from 'three';
 
-window.addEventListener('resize', onWindowResize);
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+//import { GUI } from 'dat.gui'
+import { defaultBlocks } from './defaultblocks';
 
-// init renderer
-const renderer = new THREE.WebGLRenderer({antialias: false});
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
-
-const texture = new THREE.TextureLoader().load('textures/terrain.png');
-texture.magFilter = THREE.NearestFilter;
-texture.minFilter = THREE.NearestFilter;
-
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-
-// init scene
-const scene = new THREE.Scene();
-
-const env = {
-    sun: 0xffffff,
-    shadow: 0x9b9b9b,
-    sky: 0x99ccff,
-    fog: 0xffffff,
-    fogAmount: 4096
+class Environment {
+    sun = 0xffffff;
+    shadow = 0x9b9b9b;
+    sky = 0x99ccff;
+    fog = 0xffffff;
+    fogAmount = 4096;
 }
 
-// Sky color
-scene.background = new THREE.Color(0xd0e7ff); // TODO: how is this calculated in cc? sky + fog?
 
-// Shadow
-const shadow = new THREE.AmbientLight(env.shadow);
-scene.add(shadow);
-
-// Sun
-const directionalLight = new THREE.DirectionalLight(env.sun, 0.4);
-directionalLight.position.set( 1, 1, 0.5 ).normalize();
-scene.add( directionalLight );
-
-const axes = new THREE.AxesHelper(2);
-axes.renderOrder = 1;
-
-const blockMaterial = new THREE.MeshLambertMaterial({
-    map: texture
-});
-
-const transparentMaterial = new THREE.MeshLambertMaterial({
-    map: texture,
-    transparent: true,
-    side: THREE.DoubleSide
-});
-
-const params = {
-    'axes': false,
-    'mipmaps': false,
-    'x': 64,
-    'y': 0,
-    'z': 64,
-    'arr': '...'
+class Block {
+    sprite = false;
+    drawtype = 0; // Opaque
+    fullbright = false;
+    top;
+    side; // This also determines sprite textures
+    bottom;
+    minX = 0;
+    minY = 0;
+    minZ = 0;
+    maxX = 16;
+    maxY = 16;
+    maxZ = 16;
 }
-const maps = ['bigsample.cw', 'samplemap.cw']
-const texpacks = ['default']
 
-const gui = new GUI()
-const mapFolder = gui.addFolder('Map')
-mapFolder.add(params, 'arr', maps).name('Map').setValue(maps[0])
-mapFolder.add(params, 'arr', texpacks).name('Texture Pack').setValue(texpacks[0])
-mapFolder.open()
-
-const envFolder = gui.addFolder('Env')
-envFolder.addColor(env, 'fog').name('Fog')
-envFolder.addColor(env, 'sun').name('Sun')
-envFolder.addColor(env, 'shadow').name('Shadow')
-envFolder.addColor(env, 'sky').name('Sky')
-envFolder.add(env, 'fogAmount', 1, 4096, 256).name('Fog Distance')
-envFolder.open()
-
-const camFolder = gui.addFolder('Camera')
-camFolder.add(params, 'mipmaps').name('Mipmaps').onChange(function(mipmaps) {
-    const texture = new THREE.TextureLoader().load('textures/terrain.png');
-    texture.magFilter = THREE.NearestFilter;
-
-    if (mipmaps) texture.minFilter = THREE.NearestMipmapLinearFilter;
-    else texture.minFilter = THREE.NearestFilter;
-
-    blockMaterial.map = texture;
-    transparentMaterial.map = texture;
-});
-camFolder.add(params, 'axes').name('Axes').onChange(function(b) {
-    if (b) {
-        scene.add(axes);
-    } else {
-        scene.remove(axes);
+class BlockDefs {
+    list = []
+    constructor() {
+        for (let b in defaultBlocks) {
+            let bl = new Block();
+            bl.sprite = defaultBlocks[b][0];
+            bl.top = defaultBlocks[b][1];
+            bl.side = defaultBlocks[b][2];
+            bl.bottom = defaultBlocks[b][3];
+            bl.drawtype = defaultBlocks[b][4];
+            bl.fullbright = defaultBlocks[b][5];
+            bl.minX = defaultBlocks[b][6];
+            bl.minY = defaultBlocks[b][7];
+            bl.minZ = defaultBlocks[b][8];
+            bl.maxX = defaultBlocks[b][9];
+            bl.maxY = defaultBlocks[b][10];
+            bl.maxZ = defaultBlocks[b][11];
+            this.list.push(bl);
+        }
     }
-});
-camFolder.add(params, 'x').name('Center X')
-camFolder.add(params, 'y').name('Center Y')
-camFolder.add(params, 'z').name('Center Z')
-camFolder.open()
+}
+
+class World {
+    width = 0;
+    height = 0;
+    length = 0;
+    blocks = [];
+    blockDefs = new BlockDefs();
+    env = new Environment();
+
+    constructor(arr) {
+        nbt.parse(arr, (error, data) => {
+            if (error) { throw error; }
+            if (data.name !== 'ClassicWorld') { console.error('Invalid nbt name! Got', data.name); }
+
+            this.width = data.value.X.value;
+            this.height = data.value.Y.value;
+            this.length = data.value.Z.value;
+
+            this.blocks = data.value.BlockArray.value;
+        });
+    }
+
+    coordsToIndex(x, y, z) {
+        return x + this.width * (z + y * this.length)
+    }
+
+    shouldCull(curBlock, x, y, z) {
+        let index = this.coordsToIndex(x, y, z);
+        let block = this.blocks[index];
+        let blockdef = this.blockDefs.list[block];
+        if (blockdef.drawtype === 4) return false;
+        if (block >= 8 && block <= 11 && (curBlock < 8 || curBlock > 11)) return false; // Cull liquids touching each other
+        if (block === 18) return false; // Don't cull leaves TODO: fix z-fighting
+        return !blockdef.sprite;
+    }
+
+    static async load_world(path) {
+        return await fetch(path).then(resp => resp.arrayBuffer()).then(arr => new World(arr));
+    }
+}
+
+const BlockGeometries = new function() {
+    this.px = new THREE.PlaneGeometry(1, 1);
+    this.px.rotateY(Math.PI / 2);
+    this.px.translate(0.5, 0, 0);
+
+    this.nx = new THREE.PlaneGeometry(1, 1);
+    this.nx.rotateY(-Math.PI / 2);
+    this.nx.translate(-0.5, 0, 0);
+
+    this.py = new THREE.PlaneGeometry(1, 1);
+    this.py.rotateX(-Math.PI / 2);
+    this.py.translate(0, 0.5, 0);
+
+    this.ny = new THREE.PlaneGeometry(1, 1);
+    this.ny.rotateX(Math.PI / 2);
+    this.ny.translate(0, -0.5, 0);
+
+    this.pz = new THREE.PlaneGeometry(1, 1);
+    this.pz.translate(0, 0, 0.5);
+
+    this.nz = new THREE.PlaneGeometry(1, 1);
+    this.nz.rotateY(Math.PI);
+    this.nz.translate(0, 0, -0.5);
+
+    const sprite1 = new THREE.PlaneGeometry(1, 1);
+    sprite1.rotateY(Math.PI / 4);
+
+    const sprite2 = new THREE.PlaneGeometry(1, 1);
+    sprite2.rotateY(-Math.PI / 4);
+    sprite2.uv = sprite1.uv
+
+    this.sprite = mergeGeometries([sprite1, sprite2])
+}()
+
+class Materials {
+    textures;
+    opaque;
+    transparent; // Sprites must always be transparent
+    transdoublesided;
+    // translucent
+    constructor(texture) {
+        this.opaque = new THREE.MeshLambertMaterial({
+            map: texture
+        });
+
+        this.transparent = new THREE.MeshLambertMaterial({
+            map: texture,
+            transparent: true,
+            side: THREE.DoubleSide // WIP
+        });
+
+        this.transdoublesided = new THREE.MeshLambertMaterial({ // TODO: Not used for anything yet
+            map: texture,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+    }
+
+    static load_textures(path) {
+        const textures = new THREE.TextureLoader().load(path);
+        textures.magFilter = THREE.NearestFilter;
+        textures.minFilter = THREE.NearestFilter;
+
+        return new Materials(textures);
+    }
+}
 
 function setTexture(geometry, tex) {
     let uv = geometry.attributes.uv;
@@ -129,218 +185,141 @@ function setTexture(geometry, tex) {
     uv.needsUpdate = true;
 }
 
-function setBlockSize(geometry, minX, minY, maxX, maxY) {
+function setBlockSize(geometry, blockdef) {
 
 }
 
-const matrix = new THREE.Matrix4();
+function buildScene(world, materials) {
+    let scene = new THREE.Scene();
 
-const pxGeometry = new THREE.PlaneGeometry(1, 1);
-pxGeometry.rotateY(Math.PI / 2);
-pxGeometry.translate(0.5, 0, 0);
+    // Sky color
+    scene.background = new THREE.Color(0xd0e7ff); // TODO: how is this calculated in cc? sky + fog?
 
-const nxGeometry = new THREE.PlaneGeometry(1, 1);
-nxGeometry.rotateY(-Math.PI / 2);
-nxGeometry.translate(-0.5, 0, 0);
+    const shadow = new THREE.AmbientLight(world.env.shadow);
+    scene.add(shadow);
 
-const pyGeometry = new THREE.PlaneGeometry(1, 1);
-pyGeometry.rotateX(-Math.PI / 2);
-pyGeometry.translate(0, 0.5, 0);
+    const sun = new THREE.DirectionalLight(world.env.sun, 0.4);
+    sun.position.set( 1, 1, 0.5 ).normalize();
+    scene.add(sun);
 
-const nyGeometry = new THREE.PlaneGeometry(1, 1);
-nyGeometry.rotateX(Math.PI / 2);
-nyGeometry.translate(0, -0.5, 0);
+    let opaqueGeometries = [];
+    let transparentGeometries = [];
+    const matrix = new THREE.Matrix4();
+    for (let x = 0; x < world.width; x++) {
+        for (let y = 0; y < world.height; y++) {
+            for (let z = 0; z < world.length; z++) {
 
-const pzGeometry = new THREE.PlaneGeometry(1, 1);
-pzGeometry.translate(0, 0, 0.5);
+                const index = world.coordsToIndex(x, y, z);
+                const block = world.blocks[index];
+                const blockdef = world.blockDefs.list[block];
+                if (blockdef.drawtype === 4) continue // Skip air and gas blocks
 
-const nzGeometry = new THREE.PlaneGeometry(1, 1);
-nzGeometry.rotateY(Math.PI);
-nzGeometry.translate(0, 0, -0.5);
+                matrix.makeTranslation(
+                    x - world.width / 2,
+                    y,
+                    z - world.length / 2
+                );
 
-let spriteGeometry;
-{
-    const sprite1 = new THREE.PlaneGeometry(1, 1);
-    sprite1.rotateY(Math.PI / 4);
+                let geometries = []
+                if (blockdef.sprite) {
+                    let geometry = BlockGeometries.sprite.clone().applyMatrix4(matrix);
+                    setTexture(geometry, blockdef.side); // Sprite blocks are textured by their side tex
+                    geometries.push(geometry);
+                } else {
+                    if (y+1 === world.height || !world.shouldCull(block, x, y+1, z)) {
+                        let geometry = BlockGeometries.py.clone().applyMatrix4(matrix);
 
-    const sprite2 = new THREE.PlaneGeometry(1, 1);
-    sprite2.rotateY(-Math.PI / 4);
-    sprite2.uv = sprite1.uv
+                        setTexture(geometry, blockdef.top);
+                        setBlockSize(geometry, blockdef);
+                        geometries.push(geometry);
+                    }
+                    if (y === 0 || !world.shouldCull(block, x, y-1, z)) {
+                        let geometry = BlockGeometries.ny.clone().applyMatrix4(matrix);
 
-    const sprites = [
-        sprite1, sprite2
-    ]
+                        setTexture(geometry, blockdef.bottom);
+                        setBlockSize(geometry, blockdef);
+                        geometries.push(geometry);
+                    }
+                    if (x+1 === world.width || !world.shouldCull(block, x+1, y, z)) {
+                        let geometry = BlockGeometries.px.clone().applyMatrix4(matrix);
 
-    spriteGeometry = mergeBufferGeometries(sprites)
+                        setTexture(geometry, blockdef.side);
+                        setBlockSize(geometry, blockdef);
+                        geometries.push(geometry);
+                    }
+                    if (x === 0 || !world.shouldCull(block, x-1, y, z)) {
+                        let geometry = BlockGeometries.nx.clone().applyMatrix4(matrix);
 
-}
+                        setTexture(geometry, blockdef.side);
+                        setBlockSize(geometry, blockdef);
+                        geometries.push(geometry);
+                    }
+                    if (z+1 === world.length || !world.shouldCull(block, x, y, z+1)) {
+                        let geometry = BlockGeometries.pz.clone().applyMatrix4(matrix);
 
+                        setTexture(geometry, blockdef.side);
+                        setBlockSize(geometry, blockdef);
+                        geometries.push(geometry);
+                    }
+                    if (z === 0 || !world.shouldCull(block, x, y, z-1)) {
+                        let geometry = BlockGeometries.nz.clone().applyMatrix4(matrix);
 
-let blocklist = {
-    // ID: sprite, top, px, pz, nx, nz, bottom, minX, minY, minZ, maxX, maxY, maxZ
+                        setTexture(geometry, blockdef.side);
+                        setBlockSize(geometry, blockdef);
+                        geometries.push(geometry);
+                    }
+                }
 
-    // px, pz, nx, nz, bottom are unused for sprites, texture is determined by top
-    // TODO: Match behaviour with cc ^
-    1: [false, 1, 1, 1, 1, 1, 1, 0, 0, 0, 16, 16, 16],
-    2: [false, 0, 3, 3, 3, 3, 2, 0, 0, 0, 16, 16, 16],
-    3: [false, 2, 2, 2, 2, 2, 2, 0, 0, 0, 16, 16, 16],
-    8: [false, 14, 14, 14, 14, 14, 14, 0, 0, 0, 16, 15, 16],
-    9: [false, 14, 14, 14, 14, 14, 14, 0, 0, 0, 16, 15, 16],
-    10: [false, 30, 30, 30, 30, 30, 30, 0, 0, 0, 16, 15, 16],
-    11: [false, 30, 30, 30, 30, 30, 30, 0, 0, 0, 16, 15, 16],
-    12: [false, 18, 18, 18, 18, 18, 18, 0, 0, 0, 16, 16, 16],
-    13: [false, 19, 19, 19, 19, 19, 19, 0, 0, 0, 16, 16, 16],
-    14: [false, 32, 32, 32, 32, 32, 32, 0, 0, 0, 16, 16, 16],
-    15: [false, 33, 33, 33, 33, 33, 33, 0, 0, 0, 16, 16, 16],
-    16: [false, 34, 34, 34, 34, 34, 34, 0, 0, 0, 16, 16, 16],
-    17: [false, 21, 20, 20, 20, 20, 21, 0, 0, 0, 16, 16, 16],
-    18: [false, 22, 22, 22, 22, 22, 22, 0, 0, 0, 16, 16, 16],
-    37: [true, 13, 13, 13, 13, 13, 13, 0, 0, 0, 16, 16, 16],
-    38: [true, 12, 12, 12, 12, 12, 12, 0, 0, 0, 16, 16, 16],
-    39: [true, 29, 29, 29, 29, 29, 29, 0, 0, 0, 16, 16, 16],
-    40: [true, 28, 28, 28, 28, 28, 28, 0, 0, 0, 16, 16, 16]
-}
+                if (geometries.length === 0) continue;
 
-function coordsToIndex(x, y, z) {
-    return x + worldWidth * (z + y * worldLength)
-}
-
-function shouldCull(curBlock, x, y, z) {
-    let index = coordsToIndex(x, y, z);
-    let block = blocks[index];
-    if (!block || block === 0) return false;
-    if (block >= 8 && block <= 11 && (curBlock < 8 || curBlock > 11)) return false; // Cull liquids touching each other
-    if (block === 18) return false; // Don't cull leaves TODO: fix z-fighting
-    return !blocklist[block][0]; //true for sprites, false for blocks
-}
-
-function isTransparent(block) {
-    if (block >= 8 && block <= 11) return true;
-    if (block === 0) return true;
-    if (block === 18) return true;
-    return blocklist[block][0]; // Sprite blocks are transparent, solid blocks arent.
-}
-
-
-const geometries = [];
-const transparentGeometries = [];
-
-let worldWidth, worldHeight, worldLength, blocks;
-
-await fetch('bigsample.cw').then(resp => resp.arrayBuffer()).then(arr => {
-    nbt.parse(arr, function(error, data) {
-        if (error) { throw error; }
-        if (data.name !== 'ClassicWorld') { console.error('Invalid nbt name! Got', data.name); }
-
-        worldWidth = data.value.X.value;
-        worldHeight = data.value.Y.value;
-        worldLength = data.value.Z.value;
-
-        blocks = data.value.BlockArray.value;
-    });
-});
-
-for (let x = 0; x < worldWidth; x++) {
-    for (let y = 0; y < worldHeight; y++) {
-        for (let z = 0; z < worldLength; z++) {
-
-            const index = coordsToIndex(x, y, z);
-            const block = blocks[index];
-            if (block === 0) continue
-
-            matrix.makeTranslation(
-                x - worldWidth / 2,
-                y,
-                z - worldLength / 2
-            );
-
-            let textures = blocklist[block];
-
-            if (textures[0]) {
-                let geometry = spriteGeometry.clone().applyMatrix4(matrix);
-
-                if (textures) setTexture(geometry, textures[1]);
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
-                continue;
-            }
-
-            if (!shouldCull(block, x, y+1, z) || y+1 === worldHeight) {
-                let geometry = pyGeometry.clone().applyMatrix4(matrix);
-
-                if (textures) setTexture(geometry, textures[1]);
-                if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
-
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
-            }
-            if (!shouldCull(block, x, y-1, z) || y === 0) {
-                let geometry = nyGeometry.clone().applyMatrix4(matrix);
-
-                if (textures) setTexture(geometry, textures[6]);
-                if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
-
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
-            }
-            if (!shouldCull(block, x+1, y, z) || x+1 === worldWidth) {
-                let geometry = pxGeometry.clone().applyMatrix4(matrix);
-
-                if (textures) setTexture(geometry, textures[2]);
-                if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
-
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
-            }
-            if (!shouldCull(block, x-1, y, z) || x === 0) {
-                let geometry = nxGeometry.clone().applyMatrix4(matrix);
-                if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
-
-                if (textures) setTexture(geometry, textures[4]);
-
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
-            }
-            if (!shouldCull(block, x, y, z+1) || z+1 === worldLength) {
-                let geometry = pzGeometry.clone().applyMatrix4(matrix);
-
-                if (textures) setTexture(geometry, textures[3]);
-                if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
-
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
-            }
-            if (!shouldCull(block, x, y, z-1) || z === 0) {
-                let geometry = nzGeometry.clone().applyMatrix4(matrix);
-
-                if (textures) setTexture(geometry, textures[5]);
-                if (textures) setBlockSize(geometry, textures[7], textures[8], textures[9], textures[10], textures[11], textures[12])
-
-                if (isTransparent(block)) transparentGeometries.push(geometry);
-                else geometries.push(geometry);
+                if (blockdef.sprite || blockdef.drawtype > 0) transparentGeometries.push(...geometries);
+                else opaqueGeometries.push(...geometries);
             }
         }
     }
+
+    if (opaqueGeometries.length > 0) {
+        let opaqueGeometry = mergeGeometries(opaqueGeometries);
+        opaqueGeometry.computeBoundingSphere();
+        let opaqueMesh = new THREE.Mesh(opaqueGeometry, materials.opaque);
+        opaqueMesh.name = 'worldmesh';
+        scene.add(opaqueMesh);
+    }
+
+    if (transparentGeometries.length > 0) {
+        let transparentGeometry = mergeGeometries(transparentGeometries);
+        transparentGeometry.computeBoundingSphere();
+        let transparentMesh = new THREE.Mesh(transparentGeometry, materials.transparent);
+        transparentMesh.name = 'worldmesh';
+        scene.add(transparentMesh);
+    }
+
+    return scene;
 }
 
+function createRenderer() {
+    // Clear everything from body to remove old renderers
+    document.body.innerHTML = '';
 
-const geometry = mergeBufferGeometries(geometries);
-geometry.computeBoundingSphere();
+    const renderer = new THREE.WebGLRenderer({antialias: false});
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+    return renderer;
+}
 
-const mesh = new THREE.Mesh(geometry, blockMaterial);
-scene.add(mesh);
+let renderer = createRenderer();
 
-const transparentGeometry = mergeBufferGeometries(transparentGeometries);
-transparentGeometry.computeBoundingSphere();
+let world = await World.load_world('bigsample.cw');
+let materials = Materials.load_textures('textures/terrain.png');
 
-const transparentMesh = new THREE.Mesh(transparentGeometry, transparentMaterial);
-scene.add(transparentMesh);
+let scene = buildScene(world, materials);
 
-camera.position.x = worldWidth;
-camera.position.y = worldHeight;
-camera.position.z = worldLength;
-
-camera.lookAt(scene.position);
+let camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.x = world.width;
+camera.position.y = world.height;
+camera.position.z = world.length;
+camera.lookAt(new THREE.Vector3(0,0,0));
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0.5, 0);
@@ -363,5 +342,6 @@ function onWindowResize() {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 }
+window.addEventListener('resize', onWindowResize);
 
 animate();
