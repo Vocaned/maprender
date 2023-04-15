@@ -82,7 +82,7 @@ export class World {
         let blockdef = this.blockDefs.list[block];
         if (blockdef.drawtype === 4) return false;
         if (block >= 8 && block <= 11 && (curBlock < 8 || curBlock > 11)) return false; // Cull liquids touching each other
-        if (curBlockdef.drawtype != blockdef.drawtype) return false;
+        if (curBlockdef.drawtype == 0 && blockdef.drawtype != 0) return false;
         if (block === 18) return false; // Don't cull leaves TODO: fix z-fighting
         return !blockdef.sprite;
     }
@@ -184,7 +184,6 @@ function setTexture(geometry, tex) {
 }
 
 function setBlockSize(geometry, blockdef) {
-
 }
 
 export function buildScene(world, materials) {
