@@ -1,4 +1,4 @@
-import { GUI } from 'dat.gui'
+//import { GUI } from 'dat.gui'
 
 /*const params = {
     'axes': false,

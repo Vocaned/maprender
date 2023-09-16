@@ -1,8 +1,8 @@
-import './nbt.js'
+import { nbt } from './nbt';
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { defaultBlocks } from './defaultblocks';
+import { Block, defaultBlocks } from './defaultblocks';
 
 class Environment {
     sun = 0xffffff;
@@ -13,40 +13,10 @@ class Environment {
 }
 
 
-class Block {
-    sprite = false;
-    drawtype = 0; // Opaque
-    fullbright = false;
-    top;
-    side; // This also determines sprite textures
-    bottom;
-    minX = 0;
-    minY = 0;
-    minZ = 0;
-    maxX = 16;
-    maxY = 16;
-    maxZ = 16;
-}
-
 class BlockDefs {
-    list = []
+    list: Record<number, Block> = {};
     constructor() {
-        for (let b in defaultBlocks) {
-            let bl = new Block();
-            bl.sprite = defaultBlocks[b][0];
-            bl.top = defaultBlocks[b][1];
-            bl.side = defaultBlocks[b][2];
-            bl.bottom = defaultBlocks[b][3];
-            bl.drawtype = defaultBlocks[b][4];
-            bl.fullbright = defaultBlocks[b][5];
-            bl.minX = defaultBlocks[b][6];
-            bl.minY = defaultBlocks[b][7];
-            bl.minZ = defaultBlocks[b][8];
-            bl.maxX = defaultBlocks[b][9];
-            bl.maxY = defaultBlocks[b][10];
-            bl.maxZ = defaultBlocks[b][11];
-            this.list.push(bl);
-        }
+        this.list = {...defaultBlocks};
     }
 }
 
@@ -58,8 +28,9 @@ export class World {
     blockDefs = new BlockDefs();
     env = new Environment();
 
-    constructor(arr) {
-        nbt.parse(arr, (error, data) => {
+    constructor(arr: ArrayBuffer) {
+        // TODO: fix types
+        nbt.parse(arr, (error: any, data: any) => {
             if (error) { throw error; }
             if (data.name !== 'ClassicWorld') { console.error('Invalid nbt name! Got', data.name); }
 
@@ -71,11 +42,11 @@ export class World {
         });
     }
 
-    coordsToIndex(x, y, z) {
+    coordsToIndex(x: number, y: number, z: number) {
         return x + this.width * (z + y * this.length)
     }
 
-    shouldCull(curBlock, x, y, z) {
+    shouldCull(curBlock: number, x: any, y: any, z: any) {
         let index = this.coordsToIndex(x, y, z);
         let block = this.blocks[index];
         let curBlockdef = this.blockDefs.list[curBlock];
@@ -87,52 +58,42 @@ export class World {
         return !blockdef.sprite;
     }
 
-    static async load_world(path) {
-        return await fetch(path).then(resp => resp.arrayBuffer()).then(arr => new World(arr));
+    static async load_world(path: URL | string) {
+        const resp = await fetch(path);
+        const arr = await resp.arrayBuffer();
+        return new World(arr);
     }
 }
 
-const BlockGeometries = new function() {
-    this.px = new THREE.PlaneGeometry(1, 1);
-    this.px.rotateY(Math.PI / 2);
-    this.px.translate(0.5, 0, 0);
+const BlockGeometries = {
+    px: new THREE.PlaneGeometry(1, 1).rotateY(Math.PI / 2).translate(0.5, 0, 0),
+    nx: new THREE.PlaneGeometry(1, 1).rotateY(-Math.PI / 2).translate(-0.5, 0, 0),
+    py: new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0.5, 0),
+    ny: new THREE.PlaneGeometry(1, 1).rotateX(Math.PI / 2).translate(0, -0.5, 0),
+    pz: new THREE.PlaneGeometry(1, 1).translate(0, 0, 0.5),
+    nz: new THREE.PlaneGeometry(1, 1).rotateY(Math.PI).translate(0, 0, -0.5),
+    sprite: (function() {
+        const sprite1 = new THREE.PlaneGeometry(1, 1);
+        sprite1.rotateY(Math.PI / 4);
 
-    this.nx = new THREE.PlaneGeometry(1, 1);
-    this.nx.rotateY(-Math.PI / 2);
-    this.nx.translate(-0.5, 0, 0);
+        const sprite2 = new THREE.PlaneGeometry(1, 1);
+        sprite2.rotateY(-Math.PI / 4);
+        sprite2.setAttribute("uv", sprite1.getAttribute("uv"))
 
-    this.py = new THREE.PlaneGeometry(1, 1);
-    this.py.rotateX(-Math.PI / 2);
-    this.py.translate(0, 0.5, 0);
+        return mergeGeometries([sprite1, sprite2]);
+    })(),
+};
 
-    this.ny = new THREE.PlaneGeometry(1, 1);
-    this.ny.rotateX(Math.PI / 2);
-    this.ny.translate(0, -0.5, 0);
-
-    this.pz = new THREE.PlaneGeometry(1, 1);
-    this.pz.translate(0, 0, 0.5);
-
-    this.nz = new THREE.PlaneGeometry(1, 1);
-    this.nz.rotateY(Math.PI);
-    this.nz.translate(0, 0, -0.5);
-
-    const sprite1 = new THREE.PlaneGeometry(1, 1);
-    sprite1.rotateY(Math.PI / 4);
-
-    const sprite2 = new THREE.PlaneGeometry(1, 1);
-    sprite2.rotateY(-Math.PI / 4);
-    sprite2.uv = sprite1.uv
-
-    this.sprite = mergeGeometries([sprite1, sprite2])
-}()
 
 export class Materials {
-    textures;
+    texture: THREE.Texture;
     opaque;
     transparent; // Sprites must always be transparent
     transdoublesided;
     // translucent
-    constructor(texture) {
+    constructor(texture: THREE.Texture) {
+        texture.colorSpace = THREE.SRGBColorSpace;
+
         this.opaque = new THREE.MeshLambertMaterial({
             map: texture
         });
@@ -148,9 +109,11 @@ export class Materials {
             transparent: true,
             side: THREE.DoubleSide
         });
+
+        this.texture = texture;
     }
 
-    static load_textures(path) {
+    static load_textures(path: string) {
         const textures = new THREE.TextureLoader().load(path);
         textures.magFilter = THREE.NearestFilter;
         textures.minFilter = THREE.NearestFilter;
@@ -159,7 +122,7 @@ export class Materials {
     }
 }
 
-function setTexture(geometry, tex) {
+function setTexture(geometry: THREE.BufferGeometry, tex: number) {
     let uv = geometry.attributes.uv;
 
     const width = 16;
@@ -183,19 +146,20 @@ function setTexture(geometry, tex) {
     uv.needsUpdate = true;
 }
 
-function setBlockSize(geometry, blockdef) {
+function setBlockSize(geometry: any, blockdef: any) {
 }
 
-export function buildScene(world, materials) {
+export function buildScene(world: World, materials: Materials) {
     let scene = new THREE.Scene();
 
     // Sky color
     scene.background = new THREE.Color(0xd0e7ff); // TODO: how is this calculated in cc? sky + fog?
 
-    const shadow = new THREE.AmbientLight(world.env.shadow);
+    // https://discourse.threejs.org/t/updates-to-lighting-in-three-js-r155/53733
+    const shadow = new THREE.AmbientLight(world.env.shadow, Math.PI);
     scene.add(shadow);
 
-    const sun = new THREE.DirectionalLight(world.env.sun, 0.4);
+    const sun = new THREE.DirectionalLight(world.env.sun, 0.5 * Math.PI);
     sun.position.set( 1, 1, 0.5 ).normalize();
     scene.add(sun);
 
